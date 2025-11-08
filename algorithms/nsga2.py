@@ -79,22 +79,30 @@ class NSGA2(Algorithm):
                     # 选择
                     mating_pool = self._selection(evaluated_pop)
                     
-                    # 交叉和变异
+                    # 交叉和变异 - 修正：传递变异概率参数
                     offspring = []
                     for i in range(0, len(mating_pool), 2):
                         if i+1 < len(mating_pool) and random.random() < self.crossover_rate:
                             child1, child2 = self.operators.crossover(mating_pool[i], mating_pool[i+1])
+                            # 修正：对两个子代都进行变异
+                            if random.random() < self.mutation_rate:
+                                child1 = self.operators.mutation(child1, self.mutation_rate)
+                            if random.random() < self.mutation_rate:
+                                child2 = self.operators.mutation(child2, self.mutation_rate)
                             offspring.append(child1)
                             offspring.append(child2)
                         else:
-                            offspring.append(mating_pool[i])
+                            # 不交叉时，对父代进行变异
+                            parent1 = mating_pool[i]
+                            if random.random() < self.mutation_rate:
+                                parent1 = self.operators.mutation(parent1, self.mutation_rate)
+                            offspring.append(parent1)
+                            
                             if i+1 < len(mating_pool):
-                                offspring.append(mating_pool[i+1])
-                    
-                    # 变异
-                    for i in range(len(offspring)):
-                        if random.random() < self.mutation_rate:
-                            offspring[i] = self.operators.mutation(offspring[i])
+                                parent2 = mating_pool[i+1]
+                                if random.random() < self.mutation_rate:
+                                    parent2 = self.operators.mutation(parent2, self.mutation_rate)
+                                offspring.append(parent2)
                     
                     # 评估子代
                     evaluated_offspring = self._evaluate_population(offspring)

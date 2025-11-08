@@ -22,20 +22,26 @@ class GeneticOperators:
                 self.operation_machines.append(list(op.machines.keys()))
     
     def initialize_population(self, pop_size):
-        """初始化种群"""
+        """基于工件的编码"""
         population = []
         for _ in range(pop_size):
-            # 机器分配部分：从每个工序的可用机器中随机选择
-            machine_part = []
-            for i in range(self.total_operations):
-                available_machines = self.operation_machines[i]
-                machine_part.append(random.choice(available_machines) - 1)  # 转换为0-based
+            # 工序序列：使用工件ID重复出现表示工序
+            sequence_part = []
+            for job_id, job in enumerate(self.problem.jobs):
+                sequence_part.extend([job_id] * len(job.operations))
+            random.shuffle(sequence_part)
             
-            # 工序排序部分：生成有效的工序序列
-            sequence_part = self._generate_valid_sequence()
+            # 机器分配：直接使用字典或列表保持对应关系
+            machine_assignment = {}
+            for job_id, job in enumerate(self.problem.jobs):
+                for op_id, op in enumerate(job.operations):
+                    available_machines = list(op.machines.keys())
+                    machine_assignment[(job_id, op_id)] = random.choice(available_machines) - 1
             
-            # 合并为染色体
-            chromosome = machine_part + sequence_part
+            chromosome = {
+                'sequence': sequence_part,
+                'machines': machine_assignment
+            }
             population.append(chromosome)
         
         return population
@@ -46,45 +52,83 @@ class GeneticOperators:
         # 为每个工件生成工序序列
         for job_id in range(1, self.num_jobs + 1):
             job = self.problem.jobs[job_id - 1]
-            for op_id in range(1, len(job.operations) + 1):
-                sequence.append(job_id)
+            sequence.extend(list([job_id]) * len(job.operations))
         
         # 随机打乱序列
         random.shuffle(sequence)
         return sequence
     
     def crossover(self, parent1, parent2):
-        """交叉操作"""
-        # 分离机器分配和工序排序部分
-        machine_part1 = parent1[:self.total_operations]
-        sequence_part1 = parent1[self.total_operations:]
+        """POX交叉操作，与文章描述一致"""
+        # 分离染色体部分
+        machine_dict1 = parent1['machines']
+        sequence1 = parent1['sequence']
+        machine_dict2 = parent2['machines'] 
+        sequence2 = parent2['sequence']
         
-        machine_part2 = parent2[:self.total_operations]
-        sequence_part2 = parent2[self.total_operations:]
+        # 随机划分工件集合为两个非空子集
+        all_jobs = list(range(self.num_jobs))
+        random.shuffle(all_jobs)
+        split_point = random.randint(1, len(all_jobs) - 1)
+        J1 = set(all_jobs[:split_point])  # 子集J1
+        # J2 = set(all_jobs[split_point:])  
+        # 子集J2
         
-        # 机器分配部分：单点交叉
-        if random.random() < 0.5:
-            point = random.randint(1, self.total_operations - 1)
-            new_machine_part1 = machine_part1[:point] + machine_part2[point:]
-            new_machine_part2 = machine_part2[:point] + machine_part1[point:]
-        else:
-            new_machine_part1 = machine_part1[:]
-            new_machine_part2 = machine_part2[:]
+        # 工序序列POX交叉
+        child_sequence1 = self._pox_crossover(sequence1, sequence2, J1)
+        child_sequence2 = self._pox_crossover(sequence2, sequence1, J1)
         
-        # 工序排序部分：顺序交叉(OX)
-        if random.random() < 0.5:
-            new_sequence_part1 = self._order_crossover(sequence_part1, sequence_part2)
-            new_sequence_part2 = self._order_crossover(sequence_part2, sequence_part1)
-        else:
-            new_sequence_part1 = sequence_part1[:]
-            new_sequence_part2 = sequence_part2[:]
+        # 机器分配均匀交叉
+        child_machines1 = {}
+        child_machines2 = {}
         
-        # 合并为新染色体
-        child1 = new_machine_part1 + new_sequence_part1
-        child2 = new_machine_part2 + new_sequence_part2
+        for job_id in range(self.num_jobs):
+            job = self.problem.jobs[job_id]
+            for op_id in range(len(job.operations)):
+                # 以概率0.5选择父代的机器分配
+                if random.random() < 0.5:
+                    child_machines1[(job_id, op_id)] = machine_dict1[(job_id, op_id)]
+                    child_machines2[(job_id, op_id)] = machine_dict2[(job_id, op_id)]
+                else:
+                    child_machines1[(job_id, op_id)] = machine_dict2[(job_id, op_id)]
+                    child_machines2[(job_id, op_id)] = machine_dict1[(job_id, op_id)]
+        
+        # 构建子代染色体
+        child1 = {
+            'sequence': child_sequence1,
+            'machines': child_machines1
+        }
+        child2 = {
+            'sequence': child_sequence2, 
+            'machines': child_machines2
+        }
         
         return child1, child2
+
+    def _pox_crossover(self, parent1, parent2, J1):
+        """POX交叉的具体实现"""
+        child = [None] * len(parent1)
+        
+        # 从parent1复制属于J1的工件工序
+        J1_positions = []
+        for i, job_id in enumerate(parent1):
+            if job_id in J1:
+                child[i] = job_id
+                J1_positions.append(i)
+        
+        # 从parent2填充属于J2的工件工序（保持相对顺序）
+        parent2_ptr = 0
+        for i in range(len(child)):
+            if child[i] is None:
+                # 找到parent2中下一个属于J2的工件
+                while parent2[parent2_ptr] in J1:
+                    parent2_ptr += 1
+                child[i] = parent2[parent2_ptr]
+                parent2_ptr += 1
+        
+        return child
     
+    '''
     def _order_crossover(self, parent1, parent2):
         """顺序交叉操作"""
         size = len(parent1)
@@ -111,24 +155,34 @@ class GeneticOperators:
             parent2_idx = (parent2_idx + 1) % size
         
         return child
+    '''
     
-    def mutation(self, chromosome):
-        """变异操作"""
-        # 分离机器分配和工序排序部分
-        machine_part = chromosome[:self.total_operations]
-        sequence_part = chromosome[self.total_operations:]
+    def mutation(self, chromosome, p_m=0.1):
+        """变异操作 - 精确对应数学描述"""
+        mutated_chromosome = {
+            'sequence': chromosome['sequence'][:],
+            'machines': chromosome['machines'].copy()
+        }
         
-        # 机器分配部分变异：从可用机器中重新选择
-        if random.random() < 0.5:
-            idx = random.randint(0, len(machine_part) - 1)
-            available_machines = self.operation_machines[idx]
-            machine_part[idx] = random.choice(available_machines) - 1
+        L = len(mutated_chromosome['sequence'])
         
-        # 工序排序部分变异：交换两个位置
-        if random.random() < 0.5:
-            idx1 = random.randint(0, len(sequence_part) - 1)
-            idx2 = random.randint(0, len(sequence_part) - 1)
-            sequence_part[idx1], sequence_part[idx2] = sequence_part[idx2], sequence_part[idx1]
+        # 工序交换变异：随机选择两个位置i和j交换工序
+        if random.random() < p_m:
+            i = random.randint(0, L - 1)
+            j = random.randint(0, L - 1)
+            # 数学表示：π' = (π₁, ..., πⱼ, ..., πᵢ, ..., π_L)
+            pi = mutated_chromosome['sequence']
+            pi[i], pi[j] = pi[j], pi[i]
         
-        # 合并为新染色体
-        return machine_part + sequence_part
+        # 机器重选变异：以概率p_m重新选择机器
+        for job_id in range(self.num_jobs):
+            job = self.problem.jobs[job_id]
+            for op_id in range(len(job.operations)):
+                if random.random() < p_m:
+                    operation = job.operations[op_id]
+                    available_machines = list(operation.machines.keys())
+                    new_machine = random.choice(available_machines) - 1
+                    # 满足约束：m_ji ∈ M_ji
+                    mutated_chromosome['machines'][(job_id, op_id)] = new_machine
+        
+        return mutated_chromosome
