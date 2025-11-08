@@ -11,7 +11,7 @@ from algorithms.base import Algorithm
 from utils.operators import GeneticOperators
 
 class MOPSO(Algorithm):
-    """MOPSO算法类"""
+    """MOPSO算法类 - 适配新的染色体结构"""
     
     def __init__(self, problem, pop_size=100, max_gen=100, w=0.4, c1=2.0, c2=2.0):
         """
@@ -42,9 +42,8 @@ class MOPSO(Algorithm):
         """初始化MOPSO算法特定参数"""
         self.operators = GeneticOperators(self.problem)
         
-        # 粒子位置和速度
+        # 粒子位置（使用字典结构）
         self.positions = []
-        self.velocities = []
         
         # 个体最优
         self.pbest_positions = []
@@ -53,6 +52,9 @@ class MOPSO(Algorithm):
         # 全局最优(存档)
         self.archive = []
         self.archive_size = 100
+        
+        # 变异概率
+        self.mutation_rate = 0.1
     
     def run(self) -> Tuple[List[Any], List[List[float]]]:
         """运行MOPSO算法"""
@@ -69,10 +71,8 @@ class MOPSO(Algorithm):
                 # 选择全局最优领导者
                 leader = self._select_leader()
                 
-                # 修复：只有当leader不为None时才更新速度
-                if leader is not None:
-                    self._update_velocity(i, leader)
-                    self._update_position(i)
+                # 更新粒子位置（基于离散操作）
+                self._update_particle(i, leader)
                 
                 # 评估新位置
                 schedule, makespan, total_workload = self._evaluate_individual(self.positions[i])
@@ -80,7 +80,7 @@ class MOPSO(Algorithm):
                 
                 # 更新个体最优
                 if len(self.pbest_objectives[i]) == 0 or self._dominates(objectives, self.pbest_objectives[i]):
-                    self.pbest_positions[i] = self.positions[i][:]
+                    self.pbest_positions[i] = self._copy_chromosome(self.positions[i])
                     self.pbest_objectives[i] = objectives
                 
                 # 更新存档
@@ -92,27 +92,20 @@ class MOPSO(Algorithm):
             # 记录当前代
             self.generation_history.append([solution['objectives'] for solution in self.archive])
             
-            print(f"Generation {gen+1}/{self.max_gen}, Archive Size: {len(self.archive)}")
+            # 显示进度
+            if (gen + 1) % 10 == 0 or gen == self.max_gen - 1:
+                print(f"Generation {gen+1}/{self.max_gen}, Archive Size: {len(self.archive)}")
         
         self.runtime = time.time() - start_time
         return self.pareto_front, self.objectives
     
     def _initialize_swarm(self):
-        """初始化粒子群"""
+        """初始化粒子群 - 使用新的染色体结构"""
         # 初始化位置
         self.positions = self.operators.initialize_population(self.pop_size)
         
-        # 初始化速度
-        total_length = len(self.positions[0])
-        for _ in range(self.pop_size):
-            velocity = []
-            for _ in range(total_length):
-                # 速度范围为[-1, 1]
-                velocity.append(random.uniform(-1, 1))
-            self.velocities.append(velocity)
-        
         # 初始化个体最优
-        self.pbest_positions = [pos[:] for pos in self.positions]
+        self.pbest_positions = [self._copy_chromosome(pos) for pos in self.positions]
         self.pbest_objectives = [[] for _ in range(self.pop_size)]
         
         # 评估初始位置并更新个体最优
@@ -123,7 +116,14 @@ class MOPSO(Algorithm):
             # 更新存档
             self._update_archive(self.positions[i], self.pbest_objectives[i])
     
-    def _select_leader(self) -> Optional[List]:
+    def _copy_chromosome(self, chromosome):
+        """深度复制染色体"""
+        return {
+            'sequence': chromosome['sequence'][:],
+            'machines': chromosome['machines'].copy()
+        }
+    
+    def _select_leader(self) -> Optional[Dict]:
         """选择全局最优领导者"""
         if len(self.archive) == 0:
             return None
@@ -140,9 +140,8 @@ class MOPSO(Algorithm):
         
         return best['position']
     
-    def _calculate_crowding_distance(self, solution: Dict[str, Union[List, List[float]]]) -> float:
+    def _calculate_crowding_distance(self, solution: Dict) -> float:
         """计算拥挤度"""
-        # 简化版拥挤度计算
         if len(self.archive) <= 2:
             return float('inf')
         
@@ -167,71 +166,66 @@ class MOPSO(Algorithm):
         if idx1 == 0 or idx1 == len(sorted_obj1) - 1:
             crowd1 = float('inf')
         else:
-            crowd1 = (sorted_obj1[idx1+1] - sorted_obj1[idx1-1]) / (sorted_obj1[-1] - sorted_obj1[0])
+            crowd1 = (sorted_obj1[idx1+1] - sorted_obj1[idx1-1]) / (sorted_obj1[-1] - sorted_obj1[0] + 1e-8)
         
         if idx2 == 0 or idx2 == len(sorted_obj2) - 1:
             crowd2 = float('inf')
         else:
-            crowd2 = (sorted_obj2[idx2+1] - sorted_obj2[idx2-1]) / (sorted_obj2[-1] - sorted_obj2[0])
+            crowd2 = (sorted_obj2[idx2+1] - sorted_obj2[idx2-1]) / (sorted_obj2[-1] - sorted_obj2[0] + 1e-8)
         
         return crowd1 + crowd2
     
-    def _update_velocity(self, i: int, leader: List):
-        """更新粒子速度"""
-        for j in range(len(self.velocities[i])):
-            # 机器分配部分使用连续值
-            if j < self.problem.get_total_operations():
-                r1, r2 = random.random(), random.random()
-                cognitive = self.c1 * r1 * (self.pbest_positions[i][j] - self.positions[i][j])
-                social = self.c2 * r2 * (leader[j] - self.positions[i][j])
-                self.velocities[i][j] = self.w * self.velocities[i][j] + cognitive + social
-                
-                # 限制速度范围
-                self.velocities[i][j] = max(-5, min(5, self.velocities[i][j]))
-            # 工序排序部分使用离散值
-            else:
-                # 简化处理，工序排序部分的速度不更新
-                pass
+    def _update_particle(self, i: int, leader: Optional[Dict]):
+        """更新粒子位置 - 使用离散操作"""
+        if leader is None:
+            return
+        
+        # 以一定概率向个体最优学习（交叉操作）
+        if random.random() < self.c1:
+            child1, child2 = self.operators.crossover(self.positions[i], self.pbest_positions[i])
+            self.positions[i] = child1  # 选择第一个子代
+        
+        # 以一定概率向全局最优学习（交叉操作）
+        if random.random() < self.c2:
+            child1, child2 = self.operators.crossover(self.positions[i], leader)
+            self.positions[i] = child1  # 选择第一个子代
+        
+        # 变异操作（惯性效应）
+        if random.random() < self.mutation_rate:
+            self.positions[i] = self.operators.mutation(self.positions[i], self.mutation_rate)
     
-    def _update_position(self, i: int):
-        """更新粒子位置"""
-        for j in range(len(self.positions[i])):
-            # 机器分配部分使用连续值
-            if j < self.problem.get_total_operations():
-                self.positions[i][j] += self.velocities[i][j]
-                # 确保在有效范围内
-                self.positions[i][j] = max(0, min(self.problem.machines - 1, self.positions[i][j]))
-            # 工序排序部分使用离散值
-            else:
-                # 随机交换两个位置
-                if random.random() < 0.1:  # 10%的概率进行交换
-                    idx1 = random.randint(self.problem.get_total_operations(), len(self.positions[i]) - 1)
-                    idx2 = random.randint(self.problem.get_total_operations(), len(self.positions[i]) - 1)
-                    self.positions[i][idx1], self.positions[i][idx2] = self.positions[i][idx2], self.positions[i][idx1]
-    
-    def _update_archive(self, position: List, objectives: List[float]):
+    def _update_archive(self, position: Dict, objectives: List[float]):
         """更新存档"""
         # 检查是否被存档中的解支配
         dominated = False
-        for solution in self.archive:
+        to_remove = []
+        
+        for idx, solution in enumerate(self.archive):
             if self._dominates(solution['objectives'], objectives):
                 dominated = True
                 break
+            elif self._dominates(objectives, solution['objectives']):
+                to_remove.append(idx)
         
         # 如果不被任何解支配，则加入存档
         if not dominated:
             # 移除被新解支配的解
-            self.archive = [s for s in self.archive if not self._dominates(objectives, s['objectives'])]
+            self.archive = [s for i, s in enumerate(self.archive) if i not in to_remove]
             
             # 添加新解
             self.archive.append({
-                'position': position[:],
+                'position': self._copy_chromosome(position),
                 'objectives': objectives[:]
             })
             
             # 如果存档超过大小限制，使用拥挤度移除一些解
             if len(self.archive) > self.archive_size:
-                self.archive.sort(key=lambda s: self._calculate_crowding_distance(s))
+                # 计算所有解的拥挤度
+                for solution in self.archive:
+                    solution['crowding_distance'] = self._calculate_crowding_distance(solution)
+                
+                # 按拥挤度排序，移除拥挤度小的解
+                self.archive.sort(key=lambda s: s.get('crowding_distance', 0))
                 self.archive = self.archive[-self.archive_size:]
     
     def _update_pareto_front_from_archive(self):
