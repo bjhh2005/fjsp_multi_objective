@@ -1,1 +1,1 @@
-python main.py -a nsga2 --pop_size 1000 --max_gen 1500 --crossover_rate 0.9 --mutation_rate 0.2 --output_dir results
+python main.py -a nsga2 --pop_size 100 --max_gen 150 --crossover_rate 0.9 --mutation_rate 0.2

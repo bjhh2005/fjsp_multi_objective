@@ -1,0 +1,1 @@
+python main.py -a mopso --pop_size 500 --max_gen 1000 --w 0.6 --c1 1.5 --c2 1.5 --mutation_rate 0.15 --seed 123 --verbose

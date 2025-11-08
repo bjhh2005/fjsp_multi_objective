@@ -51,7 +51,7 @@ class MOPSO(Algorithm):
         
         # 全局最优(存档)
         self.archive = []
-        self.archive_size = 100
+        self.archive_size = 200
         
         # 变异概率
         self.mutation_rate = 0.1
